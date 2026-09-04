@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "나의 AI 가계부",
+  title: "나의 스마트 가계부",
   description: "간편하게 지출을 기록하는 가계부",
 };
 
