@@ -1,185 +1,234 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { supabase, type Expense } from "@/lib/supabase";
 
+type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+};
+
+const WELCOME_MESSAGE: ChatMessage = {
+  id: "welcome",
+  role: "assistant",
+  content:
+    "안녕하세요! 지출을 말하거나 통계를 물어봐 주세요.\n예: \"오늘 점심 12,000원\" / \"이번 달 총 지출이 얼마야?\"",
+};
+
 export default function Home() {
-  const [date, setDate] = useState(() => new Date().toISOString().split("T")[0]);
-  const [amount, setAmount] = useState("");
-  const [description, setDescription] = useState("");
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [messages, setMessages] = useState<ChatMessage[]>([WELCOME_MESSAGE]);
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    async function loadExpenses() {
+      const { data, error } = await supabase
+        .from("expenses")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (!error && data) {
+        setExpenses(data);
+      }
+      setLoading(false);
+    }
+
     loadExpenses();
   }, []);
 
-  async function loadExpenses() {
-    const { data, error } = await supabase
-      .from("expenses")
-      .select("*")
-      .order("created_at", { ascending: false });
-
-    if (!error && data) {
-      setExpenses(data);
-    }
-    setLoading(false);
-  }
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!date || !amount || !description.trim()) return;
-
-    setSaving(true);
-    const { data, error } = await supabase
-      .from("expenses")
-      .insert({
-        date,
-        amount: Number(amount),
-        description: description.trim(),
-      })
-      .select()
-      .single();
-
-    setSaving(false);
-
-    if (!error && data) {
-      setExpenses((prev) => [data, ...prev]);
-      setAmount("");
-      setDescription("");
-    }
-  }
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, sending]);
 
   const formatAmount = (value: number) =>
     new Intl.NumberFormat("ko-KR").format(value);
 
-  const totalAmount = expenses.reduce((sum, e) => sum + e.amount, 0);
+  async function handleSend(e?: React.FormEvent) {
+    e?.preventDefault();
+    const text = input.trim();
+    if (!text || sending) return;
 
-  const inputClassName =
-    "w-full rounded-xl bg-surface px-4 py-3.5 text-[15px] text-foreground outline-none transition placeholder:text-muted focus:bg-white md:py-3 md:text-sm";
+    const userMessage: ChatMessage = {
+      id: `user-${Date.now()}`,
+      role: "user",
+      content: text,
+    };
 
-  const labelClassName =
-    "text-[13px] font-medium tracking-wide text-muted uppercase";
+    setMessages((prev) => [...prev, userMessage]);
+    setInput("");
+    setSending(true);
+
+    try {
+      const history = messages
+        .filter((m) => m.id !== "welcome")
+        .map(({ role, content }) => ({ role, content }));
+
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: text,
+          history,
+          expenses,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || "요청에 실패했습니다.");
+      }
+
+      if (data.expense) {
+        setExpenses((prev) => [data.expense as Expense, ...prev]);
+      }
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `assistant-${Date.now()}`,
+          role: "assistant",
+          content: data.reply as string,
+        },
+      ]);
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `error-${Date.now()}`,
+          role: "assistant",
+          content: "죄송해요, 잠시 문제가 생겼어요. 다시 시도해 주세요.",
+        },
+      ]);
+    } finally {
+      setSending(false);
+      inputRef.current?.focus();
+    }
+  }
 
   return (
-    <div className="min-h-full w-full bg-background">
-      <main className="mx-auto flex min-h-full w-full max-w-md flex-col px-5 py-12 sm:px-8 sm:py-16">
-        <header className="mb-12">
-          <h1 className="text-[28px] font-semibold tracking-tight text-foreground sm:text-[32px]">
-            나의 스마트 가계부
-          </h1>
-          <p className="mt-2 text-[15px] text-muted">
-            오늘의 지출을 기록해 보세요
-          </p>
-        </header>
+    <div className="flex h-dvh w-full flex-col bg-background">
+      <header className="shrink-0 border-b border-black/5 bg-white/80 px-4 py-3.5 backdrop-blur-md">
+        <h1 className="text-center text-[17px] font-semibold tracking-tight text-foreground">
+          AI 가계부 챗봇
+        </h1>
+      </header>
 
-        <section className="w-full rounded-2xl bg-surface p-6 sm:p-7">
-          <form onSubmit={handleSubmit} className="flex flex-col gap-6">
-            <div className="flex flex-col gap-2">
-              <label htmlFor="date" className={labelClassName}>
-                날짜
-              </label>
-              <input
-                id="date"
-                type="date"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                className={inputClassName}
-                required
-              />
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <label htmlFor="amount" className={labelClassName}>
-                금액
-              </label>
-              <div className="relative">
-                <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 font-mono text-[15px] text-muted md:text-sm">
-                  ₩
-                </span>
-                <input
-                  id="amount"
-                  type="number"
-                  min="0"
-                  step="1"
-                  placeholder="0"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  className={`${inputClassName} pl-9 font-mono tabular-nums`}
-                  required
-                />
-              </div>
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <label htmlFor="description" className={labelClassName}>
-                내용
-              </label>
-              <input
-                id="description"
-                type="text"
-                placeholder="예: 점심 식사, 교통비"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                className={inputClassName}
-                required
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={saving}
-              className="mt-2 w-full rounded-xl bg-accent py-3.5 text-[15px] font-medium text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50 md:py-3 md:text-sm"
-            >
-              {saving ? "저장 중..." : "저장하기"}
-            </button>
-          </form>
-        </section>
-
-        <section className="mt-14 w-full">
-          <div className="mb-8 flex items-end justify-between">
-            <h2 className="text-[13px] font-medium tracking-wide text-muted uppercase">
-              지출 내역
+      <section className="shrink-0 border-b border-black/5 bg-white">
+        <div className="mx-auto max-w-lg px-4 py-3">
+          <div className="mb-2 flex items-center justify-between">
+            <h2 className="text-[12px] font-medium tracking-wide text-muted uppercase">
+              저장된 지출
             </h2>
             {!loading && expenses.length > 0 && (
-              <p className="font-mono text-[22px] font-semibold tabular-nums tracking-tight text-foreground sm:text-2xl">
-                ₩{formatAmount(totalAmount)}
+              <p className="font-mono text-[13px] tabular-nums text-muted">
+                총 ₩{formatAmount(expenses.reduce((s, e) => s + e.amount, 0))}
               </p>
             )}
           </div>
 
           {loading ? (
-            <p className="py-8 text-center text-[15px] text-muted">
-              불러오는 중...
-            </p>
+            <p className="py-2 text-[13px] text-muted">불러오는 중...</p>
           ) : expenses.length === 0 ? (
-            <p className="py-8 text-center text-[15px] text-muted">
+            <p className="py-2 text-[13px] text-muted">
               아직 기록된 지출이 없습니다.
             </p>
           ) : (
-            <ul className="flex flex-col gap-1">
+            <div className="flex gap-2.5 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {expenses.map((expense) => (
-                <li
+                <article
                   key={expense.id}
-                  className="flex items-center justify-between gap-4 rounded-xl px-4 py-4 transition hover:bg-surface sm:px-5"
+                  className="w-[148px] shrink-0 rounded-2xl bg-surface px-3.5 py-3"
                 >
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-[15px] text-foreground">
-                      {expense.description}
-                    </p>
-                    <p className="mt-1 text-[13px] text-muted">
-                      {expense.date}
-                    </p>
-                  </div>
-                  <span className="shrink-0 font-mono text-[17px] font-medium tabular-nums tracking-tight text-accent sm:text-lg">
+                  <p className="text-[11px] text-muted">{expense.date}</p>
+                  <p className="mt-1 font-mono text-[15px] font-semibold tabular-nums tracking-tight text-accent">
                     ₩{formatAmount(expense.amount)}
-                  </span>
-                </li>
+                  </p>
+                  <p className="mt-1 truncate text-[13px] text-foreground">
+                    {expense.description}
+                  </p>
+                </article>
               ))}
-            </ul>
+            </div>
           )}
-        </section>
+        </div>
+      </section>
+
+      <main className="mx-auto flex min-h-0 w-full max-w-lg flex-1 flex-col">
+        <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
+          {messages.map((message) => (
+            <div
+              key={message.id}
+              className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
+            >
+              <div
+                className={`max-w-[80%] whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 text-[15px] leading-relaxed ${
+                  message.role === "user"
+                    ? "rounded-br-md bg-accent text-white"
+                    : "rounded-bl-md bg-white text-foreground shadow-sm ring-1 ring-black/5"
+                }`}
+              >
+                {message.content}
+              </div>
+            </div>
+          ))}
+
+          {sending && (
+            <div className="flex justify-start">
+              <div className="rounded-2xl rounded-bl-md bg-white px-4 py-3 shadow-sm ring-1 ring-black/5">
+                <div className="flex gap-1">
+                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted [animation-delay:0ms]" />
+                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted [animation-delay:150ms]" />
+                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted [animation-delay:300ms]" />
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div ref={messagesEndRef} />
+        </div>
+
+        <form
+          onSubmit={handleSend}
+          className="shrink-0 border-t border-black/5 bg-white px-3 py-3 safe-bottom"
+        >
+          <div className="flex items-end gap-2">
+            <input
+              ref={inputRef}
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="지출 입력 또는 질문해 주세요"
+              disabled={sending}
+              className="min-h-[44px] flex-1 rounded-2xl bg-surface px-4 py-2.5 text-[15px] text-foreground outline-none placeholder:text-muted disabled:opacity-60"
+              autoComplete="off"
+            />
+            <button
+              type="submit"
+              disabled={sending || !input.trim()}
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent text-white transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-40"
+              aria-label="전송"
+            >
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                aria-hidden="true"
+              >
+                <path
+                  d="M3.4 20.4 21 12 3.4 3.6 3 10.5l12 1.5L3 13.5l.4 6.9Z"
+                  fill="currentColor"
+                />
+              </svg>
+            </button>
+          </div>
+        </form>
       </main>
     </div>
   );

@@ -27,3 +27,7 @@ body {
     "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
 }
+
+.safe-bottom {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
